@@ -1,14 +1,22 @@
-from sqlalchemy import String, Integer, ForeignKey, DateTime, Boolean
-from sqlalchemy.orm import Mapped, mapped_column
+# app/models/refresh_token.py
+from sqlalchemy import Column, String, BigInteger, DateTime, Boolean, ForeignKey, Index
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 from app.database import Base
-from datetime import datetime, timezone
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    token_hash: Mapped[str] = mapped_column(String(128), unique=True)  # хеш refresh токена (храним не сам токен, а его хеш)
-    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True))
-    revoked: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    token_hash = Column(String(255), primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    revoked = Column(Boolean, nullable=False, default=False)
+    
+    # Связи
+    user = relationship("User", back_populates="refresh_tokens")
+    
+    __table_args__ = (
+        Index("idx_refresh_tokens_expires_at", "expires_at", postgresql_where=(revoked == False)),
+        Index("idx_refresh_tokens_user_id", "user_id"),
+    )

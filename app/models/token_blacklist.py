@@ -1,7 +1,15 @@
+# app/models/token_blacklist.py
+from sqlalchemy import Column, UUID, DateTime, Index
+from sqlalchemy.sql import func
+from app.database import Base
+
 class TokenBlacklist(Base):
     __tablename__ = "token_blacklist"
     
-    id: Mapped[int] = mapped_column(primary_key=True)
-    jti: Mapped[str] = mapped_column(String(50), unique=True)  # JWT ID (уникальный идентификатор токена)
-    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    token_jti = Column(UUID, primary_key=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    
+    __table_args__ = (
+        Index("idx_blacklist_expires_at", "expires_at"),
+    )
