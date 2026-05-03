@@ -76,3 +76,7 @@ class TokenService:
         projects = json.loads(user.projects)  # из модели
         new_access = self.create_access_token(user.id, projects, user.role)
         return new_access
+
+    async def revoke_all_user_refresh_tokens(self, user_id: int) -> int:
+        """Отозвать все refresh токены пользователя"""
+        return await self.refresh_repo.revoke_all_by_user(user_id)

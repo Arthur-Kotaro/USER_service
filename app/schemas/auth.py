@@ -43,3 +43,24 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True  # Для работы с SQLAlchemy моделями (Pydantic v2)
         # или или orm_mode = True (для Pydantic v1)
+
+class ChangePasswordRequest(BaseModel):
+    """Схема для смены пароля"""
+    current_password: str
+    new_password: str
+    confirm_password: str
+
+class PasswordExpiryResponse(BaseModel):
+    """Схема для ответа с оставшимся временем действия пароля"""
+    days_remaining: int
+    is_expired: bool
+    expires_at: Optional[datetime]
+
+class PasswordResetRequest(BaseModel):
+    """Схема для запроса на восстановление доступа"""
+    email: EmailStr
+
+class PasswordResetResponse(BaseModel):
+    """Схема для ответа на восстановление"""
+    message: str
+    temp_password_sent: bool

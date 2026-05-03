@@ -1,16 +1,17 @@
 # app/repositories/blacklist_repo.py
-from sqlalchemy.orm import Session
-from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
+from datetime import datetime, timezone
 from app.models.token_blacklist import TokenBlacklist
 
 class BlacklistRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
     
     async def add_token(self, token: str, expires_at: datetime):
         """Добавить токен в черный список"""
         blacklisted_token = TokenBlacklist(
-            token=token,
+            token_jti=token,
             expires_at=expires_at
         )
         self.db.add(blacklisted_token)
@@ -18,15 +19,20 @@ class BlacklistRepository:
         
     async def is_blacklisted(self, token: str) -> bool:
         """Проверить, находится ли токен в черном списке"""
-        return self.db.query(TokenBlacklist).filter(
-            TokenBlacklist.token == token,
-            TokenBlacklist.expires_at > datetime.utcnow()
-        ).first() is not None
+        result = await self.db.execute(
+            select(TokenBlacklist).where(
+                TokenBlacklist.token_jti == token,
+                TokenBlacklist.expires_at > datetime.now(timezone.utc)
+            )
+        )
+        return result.scalar_one_or_none() is not None
     
     async def delete_expired(self) -> int:
         """Удалить просроченные токены"""
-        deleted = self.db.query(TokenBlacklist).filter(
-            TokenBlacklist.expires_at <= datetime.utcnow()
-        ).delete()
-        self.db.commit()
-        return deleted
+        result = await self.db.execute(
+            delete(TokenBlacklist).where(
+                TokenBlacklist.expires_at <= datetime.now(timezone.utc)
+            )
+        )
+        await self.db.commit()
+        return result.rowcount

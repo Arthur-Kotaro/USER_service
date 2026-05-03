@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # Admin
     ADMIN_PASSWORD: str
     
+    # Email настройки (для отправки временных паролей)
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    FROM_EMAIL: str = ""
+    
     @property
     def get_database_url(self) -> str:
         """Возвращает URL для подключения к БД"""
@@ -32,5 +39,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"  # Игнорировать лишние поля в .env
 
 settings = Settings()

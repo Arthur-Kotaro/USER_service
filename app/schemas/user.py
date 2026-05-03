@@ -1,4 +1,4 @@
-# app/schemas/user.py
+# app/schemas/user.py - обновленный
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import date, datetime
@@ -17,6 +17,8 @@ class UserCreate(BaseModel):
     gender: Optional[str] = Field(None, pattern="^[MF]$")
     birth_date: Optional[date] = None
     dept_code: Optional[str] = None
+    phone_work: Optional[str] = Field(None, max_length=20)
+    phone_mobile: Optional[str] = Field(None, max_length=20)
     status: UserStatus = UserStatus.active
     
     @field_validator('gender')
@@ -31,6 +33,8 @@ class UserUpdate(BaseModel):
     gender: Optional[str] = Field(None, pattern="^[MF]$")
     birth_date: Optional[date] = None
     dept_code: Optional[str] = None
+    phone_work: Optional[str] = Field(None, max_length=20)
+    phone_mobile: Optional[str] = Field(None, max_length=20)
     status: Optional[UserStatus] = None
 
 class UserResponse(BaseModel):
@@ -41,9 +45,12 @@ class UserResponse(BaseModel):
     gender: Optional[str]
     birth_date: Optional[date]
     dept_code: Optional[str]
+    phone_work: Optional[str]
+    phone_mobile: Optional[str]
     status: str
     created_at: datetime
     last_login_at: Optional[datetime]
+    password_updated_at: Optional[datetime]
     roles: List[str] = []
     projects: List[str] = []
     

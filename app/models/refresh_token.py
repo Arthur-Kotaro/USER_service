@@ -1,5 +1,5 @@
 # app/models/refresh_token.py
-from sqlalchemy import Column, String, BigInteger, DateTime, Boolean, ForeignKey, Index
+from sqlalchemy import Column, BigInteger, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -15,8 +15,3 @@ class RefreshToken(Base):
     
     # Связи
     user = relationship("User", back_populates="refresh_tokens")
-    
-    __table_args__ = (
-        Index("idx_refresh_tokens_expires_at", "expires_at", postgresql_where=(revoked == False)),
-        Index("idx_refresh_tokens_user_id", "user_id"),
-    )

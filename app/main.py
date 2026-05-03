@@ -1,30 +1,62 @@
+# app/main.py
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import asyncio
 from app.repositories.blacklist_repo import BlacklistRepository
 from app.repositories.refresh_repo import RefreshTokenRepository
-from app.database import SessionLocal
+from app.database import AsyncSessionLocal, engine
 from app.utils.cleanup import cleanup_expired_tokens
+from sqlalchemy import text
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     print("Starting up...")
-    db = SessionLocal()
-    blacklist_repo = BlacklistRepository(db)
-    refresh_repo = RefreshTokenRepository(db)
-    task = asyncio.create_task(cleanup_expired_tokens(blacklist_repo, refresh_repo))
+    
+    # Проверка подключения к БД
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        print("Database connection successful")
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+        raise
+    
+    # Создаем задачу очистки токенов без использования сессии в lifespan
+    blacklist_repo = None
+    refresh_repo = None
+    task = None
+    
+    try:
+        # Создаем репозитории внутри lifespan, но не держим сессию открытой
+        async with AsyncSessionLocal() as db:
+            blacklist_repo = BlacklistRepository(db)
+            refresh_repo = RefreshTokenRepository(db)
+            # Проверяем, что репозитории работают
+            await blacklist_repo.delete_expired()
+            await refresh_repo.delete_expired()
+        
+        # Запускаем задачу очистки, которая будет создавать свои сессии
+        task = asyncio.create_task(cleanup_expired_tokens())
+        
+    except Exception as e:
+        print(f"Error during startup: {e}")
+        raise
     
     yield  # Приложение работает
     
     # Shutdown
     print("Shutting down...")
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        print("Cleanup task cancelled")
-    db.close()
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            print("Cleanup task cancelled")
+    
+    # Закрываем engine
+    await engine.dispose()
+    print("Database engine disposed")
 
 # Создаем приложение с lifespan
 app = FastAPI(
@@ -33,7 +65,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Ваши эндпоинты
+# Эндпоинты
 @app.get("/")
 async def root():
     return {"message": "User Service is running"}
