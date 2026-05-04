@@ -23,7 +23,7 @@ class TokenService:
         }
         return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-    def create_refresh_token(self, user_id: int) -> str:
+    async def create_refresh_token(self, user_id: int) -> str:
         """Создает refresh токен и сохраняет его хеш в БД"""
         expires = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         payload = {
@@ -36,7 +36,7 @@ class TokenService:
         # Храним хеш refresh токена (а не сам токен) для защиты от утечки БД
         token_hash = hash_token(token)
         # Сохраняем в БД
-        self.refresh_repo.create(user_id=user_id, token_hash=token_hash, expires_at=expires)
+        await self.refresh_repo.create(user_id=user_id, token_hash=token_hash, expires_at=expires)
         return token
 
     def decode_token(self, token: str, token_type: str = "access") -> Optional[Dict[str, Any]]:
