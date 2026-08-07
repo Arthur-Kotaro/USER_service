@@ -13,7 +13,7 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-
+    requires_password_change: bool = False
 class TokenData(BaseModel):
     """Схема для данных токена"""
     user_id: int

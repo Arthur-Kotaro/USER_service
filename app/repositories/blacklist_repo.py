@@ -8,10 +8,10 @@ class BlacklistRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
     
-    async def add_token(self, token: str, expires_at: datetime):
+    async def add(self, jti: str, expires_at: datetime):
         """Добавить токен в черный список"""
         blacklisted_token = TokenBlacklist(
-            token_jti=token,
+            token_jti=jti,
             expires_at=expires_at
         )
         self.db.add(blacklisted_token)
