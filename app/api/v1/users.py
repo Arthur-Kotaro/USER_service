@@ -1,7 +1,9 @@
-# app/api/v1/users.py (НОВЫЙ ФАЙЛ)
+# app/api/v1/users.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from datetime import datetime
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.dependencies import get_current_user
@@ -32,8 +34,7 @@ async def get_auth_service(db) -> AuthService:
     blacklist_repo = BlacklistRepository(db)
     refresh_repo = RefreshTokenRepository(db)
     token_service = TokenService(blacklist_repo, refresh_repo, user_repo)
-    # email_service = EmailService()  # если нужен
-    return AuthService(user_repo, token_service, None)  # email_service можно добавить
+    return AuthService(user_repo, token_service, None)
 
 
 # ========== Профиль пользователя ==========
@@ -43,18 +44,19 @@ async def get_my_profile(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Получение информации о текущем пользователе
-    """
-    user_service = await get_user_service(db)
-    
-    projects = await current_user.awaitable_attrs.projects
-    roles = await current_user.awaitable_attrs.roles
-    
-    project_titles = [p.project_title for p in projects] if projects else []
-    role_titles = [r.role_title for r in roles] if roles else []
-    
-    return user_to_response(current_user, role_titles, project_titles)
+    """Получение информации о текущем пользователе"""
+    # ИСПРАВЛЕНО: используем selectinload
+    query = select(User).options(
+        selectinload(User.roles),
+        selectinload(User.projects)
+    ).where(User.user_id == current_user.user_id)
+    result = await db.execute(query)
+    user = result.unique().scalar_one()
+
+    roles = user.get_roles_titles()
+    projects = user.get_projects_titles()
+
+    return user_to_response(user, roles, projects)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -63,25 +65,23 @@ async def update_my_profile(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Обновление информации о текущем пользователе
-    """
+    """Обновление информации о текущем пользователе"""
     user_service = await get_user_service(db)
-    
-    # Запрещаем обновление чувствительных полей
+
     update_dict = update_data.model_dump(exclude_unset=True)
-    forbidden = ['user_name', 'email']  # Нельзя изменить username и email без доп. проверки
-    
+    # НОВОЕ: разрешаем обновление full_name
+    forbidden = ['user_name', 'email', 'head_id', 'is_super_admin']  # Запрещенные поля
+
     for field in forbidden:
         update_dict.pop(field, None)
-    
+
     user = await user_service.update_user(current_user.user_id, update_dict)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     return user
 
 
@@ -91,9 +91,7 @@ async def change_my_password(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Изменение пароля текущего пользователя
-    """
+    """Изменение пароля текущего пользователя"""
     auth_service = await get_auth_service(db)
     return await auth_service.change_password(current_user.user_id, request)
 
@@ -102,20 +100,27 @@ async def change_my_password(
 async def get_my_status(
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Получение статуса текущего пользователя
-    """
+    """Получение статуса текущего пользователя"""
     from app.schemas.user import get_user_status_from_model
-    
+    from datetime import datetime, timezone
+
+    is_locked = False
+    if current_user.locked_until is not None:
+        is_locked = current_user.locked_until > datetime.now(timezone.utc)
+
     return {
         "user_id": current_user.user_id,
         "user_name": current_user.user_name,
+        "full_name": current_user.full_name,
         "email": current_user.email,
         "status": get_user_status_from_model(current_user),
         "is_blocked": current_user.blocked_at is not None,
+        "is_locked": is_locked,
         "is_deleted": current_user.deleted_at is not None,
+        "is_super_admin": current_user.is_super_admin,
         "blocked_reason": current_user.blocked_reason,
         "block_expires_at": current_user.block_expires_at,
+        "locked_until": current_user.locked_until,
         "deleted_at": current_user.deleted_at,
     }
 
@@ -130,18 +135,15 @@ async def get_users(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Получение списка пользователей (только активные)
-    """
+    """Получение списка пользователей (только активные)"""
     user_service = await get_user_service(db)
-    
+
     users = await user_service.get_all_users(skip, limit, only_active=True)
-    
-    # Фильтр по поиску если нужен
+
     if search:
-        users = [u for u in users if search.lower() in u.user_name.lower() or 
+        users = [u for u in users if search.lower() in u.user_name.lower() or
                  (u.email and search.lower() in u.email.lower())]
-    
+
     return users
 
 
@@ -151,18 +153,16 @@ async def get_user(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Получение информации о пользователе по ID (только активные)
-    """
+    """Получение информации о пользователе по ID (только активные)"""
     user_service = await get_user_service(db)
-    
+
     user = await user_service.get_user_by_id(user_id)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     return user
 
 
@@ -172,25 +172,20 @@ async def get_user_by_username(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Получение информации о пользователе по имени
-    """
+    """Получение информации о пользователе по имени"""
     user_service = await get_user_service(db)
-    
+
     user = await user_service.get_user_by_username(username)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    projects = await user.awaitable_attrs.projects
-    roles = await user.awaitable_attrs.roles
-    
-    project_titles = [p.project_title for p in projects] if projects else []
-    role_titles = [r.role_title for r in roles] if roles else []
-    
-    return user_to_response(user, role_titles, project_titles)
+
+    roles = user.get_roles_titles()
+    projects = user.get_projects_titles()
+
+    return user_to_response(user, roles, projects)
 
 
 # ========== Управление сессиями ==========
@@ -200,20 +195,18 @@ async def logout_all_devices(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """
-    Выход из всех устройств (отзыв всех refresh токенов)
-    """
+    """Выход из всех устройств (отзыв всех refresh токенов)"""
     from app.services.token_service import TokenService
     from app.repositories.blacklist_repo import BlacklistRepository
     from app.repositories.refresh_repo import RefreshTokenRepository
-    
+
     blacklist_repo = BlacklistRepository(db)
     refresh_repo = RefreshTokenRepository(db)
     user_repo = UserRepository(db)
     token_service = TokenService(blacklist_repo, refresh_repo, user_repo)
-    
+
     revoked_count = await token_service.revoke_all_user_refresh_tokens(current_user.user_id)
-    
+
     return {
         "message": f"Logged out from all devices",
         "revoked_tokens": revoked_count

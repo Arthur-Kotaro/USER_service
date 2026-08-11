@@ -1,7 +1,6 @@
-# app/services/token_service.py (исправленная версия)
+# app/services/token_service.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 import jwt
 import uuid
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from app.config import settings
@@ -13,8 +12,8 @@ from app.utils.hasher import hash_token
 
 class TokenService:
     def __init__(
-        self, 
-        blacklist_repo: BlacklistRepository, 
+        self,
+        blacklist_repo: BlacklistRepository,
         refresh_repo: RefreshTokenRepository,
         user_repo: UserRepository
     ):
@@ -22,12 +21,13 @@ class TokenService:
         self.refresh_repo = refresh_repo
         self.user_repo = user_repo
 
-    def create_access_token(self, user_id: int, projects: List[str], role: str) -> str:
+    def create_access_token(self, user_id: int, projects: List[str], roles: List[str], is_super_admin: bool = False) -> str:
         """Создает access токен с коротким сроком жизни"""
         payload = {
             "user_id": user_id,
             "projects": projects,
-            "role": role,
+            "roles": roles,  # Исправлено: передаём список ролей
+            "is_super_admin": is_super_admin,  # НОВОЕ
             "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
             "jti": str(uuid.uuid4()),
             "type": "access"
@@ -54,14 +54,13 @@ class TokenService:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             if payload.get("type") != token_type:
                 return None
-            
+
             # Проверка черного списка для access токена
             if token_type == "access":
-                # ИСПРАВЛЕНО: добавлен await
                 is_blacklisted = await self.blacklist_repo.is_blacklisted(payload["jti"])
                 if is_blacklisted:
                     return None
-            
+
             return payload
         except jwt.PyJWTError:
             return None
@@ -89,50 +88,57 @@ class TokenService:
         payload = await self.decode_token(refresh_token, "refresh")
         if not payload:
             return None
-        
+
         token_hash = hash_token(refresh_token)
         stored = await self.refresh_repo.get_by_hash(token_hash)
         if not stored or stored.revoked or stored.expires_at < datetime.now(timezone.utc):
             return None
-        
+
         user = await self.user_repo.get_by_id(payload["user_id"])
         if not user:
             return None
-        
+
         if user.deleted_at is not None:
             return None
-        
+
         if user.blocked_at is not None:
             if user.block_expires_at is not None:
                 if user.block_expires_at > datetime.now(timezone.utc):
                     return None
             else:
                 return None
-        
-        projects = await user.awaitable_attrs.projects
-        roles = await user.awaitable_attrs.roles
-        
-        project_titles = [p.project_title for p in projects] if projects else []
-        role_titles = [r.role_title for r in roles] if roles else []
-        role = role_titles[0] if role_titles else "user"
-        
+
+        # Исправлено: используем selectinload
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        query = select(User).options(
+            selectinload(User.roles),
+            selectinload(User.projects)
+        ).where(User.user_id == user.user_id)
+        result = await self.user_repo.db.execute(query)
+        user = result.unique().scalar_one()
+
+        project_titles = user.get_projects_titles()
+        role_titles = user.get_roles_titles()
+
         new_access = self.create_access_token(
             user_id=user.user_id,
             projects=project_titles,
-            role=role
+            roles=role_titles,
+            is_super_admin=user.is_super_admin
         )
-        
+
         return new_access
 
     async def is_refresh_token_valid(self, refresh_token: str) -> bool:
         """Проверка валидности refresh токена"""
         token_hash = hash_token(refresh_token)
         stored = await self.refresh_repo.get_by_hash(token_hash)
-        
+
         if not stored or stored.revoked:
             return False
-        
+
         if stored.expires_at < datetime.now(timezone.utc):
             return False
-        
+
         return True
