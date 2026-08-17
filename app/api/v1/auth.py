@@ -1,13 +1,13 @@
-# app/api/v1/auth.py (исправленная версия с импортами)
+# app/api/v1/auth.py (УПРОЩЕННАЯ ВЕРСИЯ БЕЗ REDIS)
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from app.schemas.auth import (
     LoginRequest, TokenResponse, ChangePasswordRequest,
     PasswordExpiryResponse, PasswordResetRequest
 )
-from app.schemas.user import UserResponse  # ДОБАВИТЬ ЭТУ СТРОКУ
+from app.schemas.user import UserResponse
 from app.services.auth_service import AuthService
 from app.dependencies import get_auth_service, get_current_user
-from app.database import get_db  # Добавить эту строку в импорты
+from app.database import get_db
 from app.models.user import User
 
 router = APIRouter()
@@ -97,7 +97,7 @@ async def logout(
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     current_user: User = Depends(get_current_user),
-    db = Depends(get_db)  # Нужно добавить импорт get_db
+    db = Depends(get_db)
 ):
     """
     Получение информации о текущем авторизованном пользователе.

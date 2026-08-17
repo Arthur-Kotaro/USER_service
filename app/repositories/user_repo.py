@@ -1,4 +1,4 @@
-# app/repositories/user_repo.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# app/repositories/user_repo.py (ОБНОВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, or_, and_, func
 from sqlalchemy.orm import selectinload
@@ -17,7 +17,7 @@ class UserRepository:
         """Получение пользователя по ID"""
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.projects)
+            selectinload(User.department)
         ).where(User.user_id == user_id)
 
         if not include_deleted:
@@ -30,7 +30,7 @@ class UserRepository:
         """Получение пользователя по email"""
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.projects)
+            selectinload(User.department)
         ).where(User.email == email)
 
         if not include_deleted:
@@ -43,7 +43,7 @@ class UserRepository:
         """Получение пользователя по имени пользователя"""
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.projects)
+            selectinload(User.department)
         ).where(User.user_name == username)
 
         if not include_deleted:
@@ -62,7 +62,7 @@ class UserRepository:
         """Получение списка пользователей"""
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.projects)
+            selectinload(User.department)
         )
 
         if not include_deleted:
@@ -78,7 +78,6 @@ class UserRepository:
                     )
                 )
             )
-            # НОВОЕ: Проверка временной блокировки (locked_until)
             query = query.where(
                 or_(
                     User.locked_until.is_(None),
@@ -108,7 +107,7 @@ class UserRepository:
         return result.scalars().all()
 
     async def get_locked_users(self, skip: int = 0, limit: int = 100) -> List[User]:
-        """НОВОЕ: Получение списка временно заблокированных пользователей"""
+        """Получение списка временно заблокированных пользователей"""
         now = datetime.now(timezone.utc)
         query = select(User).where(
             User.locked_until.is_not(None),
@@ -250,7 +249,7 @@ class UserRepository:
         return len(users)
 
     async def auto_unlock_locked(self) -> int:
-        """НОВОЕ: Автоматическая разблокировка пользователей с истекшей временной блокировкой (locked_until)"""
+        """Автоматическая разблокировка пользователей с истекшей временной блокировкой (locked_until)"""
         now = datetime.now(timezone.utc)
         query = select(User).where(
             User.locked_until.is_not(None),
@@ -354,7 +353,7 @@ class UserRepository:
             return []
         return [role.role_title for role in user.roles]
 
-    # ========== НОВОЕ: Методы для работы с иерархией ==========
+    # ========== Методы для работы с иерархией ==========
 
     async def get_subordinates(self, user_id: int) -> List[User]:
         """Получить подчиненных пользователя"""

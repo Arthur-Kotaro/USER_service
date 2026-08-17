@@ -2,9 +2,5 @@
 from app.repositories.user_repo import UserRepository
 from app.repositories.blacklist_repo import BlacklistRepository
 from app.repositories.refresh_repo import RefreshTokenRepository
-
-__all__ = [
-    "UserRepository",
-    "BlacklistRepository", 
-    "RefreshTokenRepository"
-]
+from app.repositories.role_repo import RoleRepository
+from app.repositories.login_history_repo import LoginHistoryRepository

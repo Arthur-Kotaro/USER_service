@@ -1,4 +1,4 @@
-# app/api/v1/users.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# app/api/v1/users.py (ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from datetime import datetime
@@ -18,7 +18,7 @@ from app.repositories.blacklist_repo import BlacklistRepository
 from app.repositories.refresh_repo import RefreshTokenRepository
 from app.models.user import User
 
-router = APIRouter(prefix="/users", tags=["Users"])
+router = APIRouter(tags=["Users"])
 
 
 # ========== Вспомогательные функции ==========
@@ -45,18 +45,17 @@ async def get_my_profile(
     db = Depends(get_db)
 ):
     """Получение информации о текущем пользователе"""
-    # ИСПРАВЛЕНО: используем selectinload
+    # УБРАЛИ selectinload(User.projects)
     query = select(User).options(
         selectinload(User.roles),
-        selectinload(User.projects)
+        selectinload(User.department)
     ).where(User.user_id == current_user.user_id)
     result = await db.execute(query)
     user = result.unique().scalar_one()
 
     roles = user.get_roles_titles()
-    projects = user.get_projects_titles()
 
-    return user_to_response(user, roles, projects)
+    return user_to_response(user, roles)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -69,8 +68,7 @@ async def update_my_profile(
     user_service = await get_user_service(db)
 
     update_dict = update_data.model_dump(exclude_unset=True)
-    # НОВОЕ: разрешаем обновление full_name
-    forbidden = ['user_name', 'email', 'head_id', 'is_super_admin']  # Запрещенные поля
+    forbidden = ['user_name', 'email', 'head_id', 'is_super_admin']
 
     for field in forbidden:
         update_dict.pop(field, None)
@@ -183,9 +181,8 @@ async def get_user_by_username(
         )
 
     roles = user.get_roles_titles()
-    projects = user.get_projects_titles()
 
-    return user_to_response(user, roles, projects)
+    return user_to_response(user, roles)
 
 
 # ========== Управление сессиями ==========

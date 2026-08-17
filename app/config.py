@@ -2,27 +2,31 @@
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from typing import Optional
+from dotenv import load_dotenv
+
+# Загружаем .env файл
+load_dotenv()
 
 class Settings(BaseSettings):
     # Режим работы
-    ENVIRONMENT: str = "development"  # development | staging | production
+    ENVIRONMENT: str = "development"
 
     # PostgreSQL настройки
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str  # ❌ Убрал значение по умолчанию!
+    POSTGRES_PASSWORD: str
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: str = "5432"
     POSTGRES_DB: str = "user_service"
     DATABASE_URL: Optional[str] = None
 
     # JWT настройки
-    SECRET_KEY: str  # ❌ Убрал значение по умолчанию!
+    SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15  # ⬅️ Уменьшил с 30 до 15 (безопаснее)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # Admin
-    ADMIN_PASSWORD: str  # ❌ Убрал значение по умолчанию!
+    ADMIN_PASSWORD: str
 
     # Email настройки
     SMTP_HOST: str = "smtp.gmail.com"

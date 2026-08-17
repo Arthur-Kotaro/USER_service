@@ -1,10 +1,10 @@
-# app/api/v1/admin.py (ОБНОВЛЁННАЯ ВЕРСИЯ)
+# app/api/v1/admin.py (ОБНОВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
 
 from app.database import get_db
-from app.dependencies import get_current_admin, get_current_user
+from app.dependencies import get_current_admin
 from app.schemas.admin import (
     UserAdminUpdate,
     UserAdminResponse,
@@ -12,19 +12,14 @@ from app.schemas.admin import (
     AdminStatsResponse,
     BlockUserRequest,
     UnblockUserRequest,
-    SoftDeleteUserRequest,
-    RestoreUserRequest
 )
-from app.schemas.user import UserResponse
 from app.services.admin_service import AdminService
-from app.services.user_service import UserService
 from app.repositories.user_repo import UserRepository
 from app.repositories.role_repo import RoleRepository
 from app.repositories.login_history_repo import LoginHistoryRepository
 from app.models.user import User
-from app.utils.hasher import hash_password
 
-router = APIRouter(prefix="/admin", tags=["Admin"])
+router = APIRouter(tags=["Admin"])
 
 
 # ========== Вспомогательные функции ==========
@@ -37,87 +32,26 @@ async def get_admin_service(db) -> AdminService:
     return AdminService(user_repo, role_repo, login_history_repo)
 
 
-async def get_user_service(db) -> UserService:
-    """Dependency для UserService"""
-    user_repo = UserRepository(db)
-    role_repo = RoleRepository(db)
-    return UserService(user_repo, role_repo)
-
-
 # ========== Управление пользователями ==========
-
-@router.post("/users", response_model=UserAdminResponse, status_code=status.HTTP_201_CREATED)
-async def create_user(
-    user_data: UserAdminUpdate,
-    current_user: User = Depends(get_current_admin),
-    db = Depends(get_db)
-):
-    """
-    Создание нового пользователя (только администратор)
-    """
-    admin_service = await get_admin_service(db)
-    
-    # Проверка на существование
-    if user_data.user_name:
-        existing = await admin_service.get_user_by_username(user_data.user_name)
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Username already exists"
-            )
-    
-    if user_data.email:
-        existing_email = await admin_service.get_user_by_email(user_data.email)
-        if existing_email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already exists"
-            )
-    
-    # Генерируем временный пароль
-    temp_password = UserService.generate_temp_password()  # Нужно добавить метод
-    hashed_password = hash_password(temp_password)
-    
-    user = await admin_service.create_user(user_data, hashed_password)
-    
-    # TODO: Отправить email с временным паролем
-    
-    return user
-
 
 @router.get("/users", response_model=UserListResponse)
 async def get_all_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    status_filter: Optional[str] = Query(None, pattern="^(active|blocked|deleted)$"),
-    search: Optional[str] = None,
     include_deleted: bool = Query(False, description="Включить удалённых пользователей"),
     current_user: User = Depends(get_current_admin),
     db = Depends(get_db)
 ):
     """
-    Получение списка пользователей с фильтрацией и пагинацией
+    Получение списка пользователей с пагинацией
     """
     admin_service = await get_admin_service(db)
-    
-    users, total = await admin_service.get_all_users(
-        skip=skip, 
-        limit=limit, 
-        status_filter=status_filter,
-        search=search,
-        include_deleted=include_deleted
-    )
-    
-    return UserListResponse(
-        total=total,
-        users=users
-    )
+    return await admin_service.get_users(skip, limit, include_deleted)
 
 
 @router.get("/users/{user_id}", response_model=UserAdminResponse)
 async def get_user_by_id(
     user_id: int,
-    include_deleted: bool = Query(False, description="Показать удалённого пользователя"),
     current_user: User = Depends(get_current_admin),
     db = Depends(get_db)
 ):
@@ -125,7 +59,7 @@ async def get_user_by_id(
     Получение информации о пользователе по ID
     """
     admin_service = await get_admin_service(db)
-    user = await admin_service.get_user_by_id(user_id, include_deleted=include_deleted)
+    user = await admin_service.get_user_by_id(user_id)
     
     if not user:
         raise HTTPException(
@@ -133,14 +67,7 @@ async def get_user_by_id(
             detail="User not found"
         )
     
-    # Загружаем роли и проекты
-    roles = await user.awaitable_attrs.roles
-    projects = await user.awaitable_attrs.projects
-    role_titles = [r.role_title for r in roles] if roles else []
-    project_titles = [p.project_title for p in projects] if projects else []
-    
-    from app.schemas.admin import user_to_admin_response
-    return user_to_admin_response(user, role_titles, project_titles)
+    return user
 
 
 @router.put("/users/{user_id}", response_model=UserAdminResponse)
@@ -155,33 +82,24 @@ async def update_user(
     """
     admin_service = await get_admin_service(db)
     
-    user = await admin_service.update_user(user_id, user_data)
+    user = await admin_service.update_user_by_admin(user_id, user_data, current_user.user_id)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
     
-    roles = await user.awaitable_attrs.roles
-    projects = await user.awaitable_attrs.projects
-    role_titles = [r.role_title for r in roles] if roles else []
-    project_titles = [p.project_title for p in projects] if projects else []
-    
-    from app.schemas.admin import user_to_admin_response
-    return user_to_admin_response(user, role_titles, project_titles)
+    return user
 
 
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: int,
-    soft: bool = Query(True, description="True - мягкое удаление, False - физическое"),
     current_user: User = Depends(get_current_admin),
     db = Depends(get_db)
 ):
     """
-    Удаление пользователя
-    - soft=True: мягкое удаление (установка deleted_at)
-    - soft=False: физическое удаление из БД
+    Мягкое удаление пользователя
     """
     admin_service = await get_admin_service(db)
     
@@ -192,15 +110,14 @@ async def delete_user(
             detail="Cannot delete your own account"
         )
     
-    deleted = await admin_service.delete_user(user_id, soft=soft)
+    deleted = await admin_service.soft_delete_user(user_id, current_user.user_id)
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
     
-    action = "soft-deleted" if soft else "permanently deleted"
-    return {"message": f"User {action} successfully", "user_id": user_id, "soft": soft}
+    return {"message": "User deleted successfully", "user_id": user_id}
 
 
 @router.post("/users/{user_id}/restore")
@@ -214,14 +131,14 @@ async def restore_user(
     """
     admin_service = await get_admin_service(db)
     
-    user = await admin_service.restore_user(user_id)
-    if not user:
+    restored = await admin_service.restore_user(user_id)
+    if not restored:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found or not deleted"
         )
     
-    return {"message": f"User {user.user_name} restored successfully", "user_id": user_id}
+    return {"message": "User restored successfully", "user_id": user_id}
 
 
 # ========== Блокировка пользователей ==========
@@ -245,32 +162,16 @@ async def block_user(
             detail="Cannot block your own account"
         )
     
-    user = await admin_service.block_user(
+    return await admin_service.block_user(
         user_id=user_id,
-        admin_id=current_user.user_id,
-        reason=block_data.reason,
-        expires_at=block_data.expires_at
+        block_data=block_data,
+        admin_id=current_user.user_id
     )
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    return {
-        "message": f"User {user.user_name} blocked successfully",
-        "user_id": user_id,
-        "blocked_at": datetime.utcnow(),
-        "reason": block_data.reason,
-        "expires_at": block_data.expires_at
-    }
 
 
 @router.post("/users/{user_id}/unblock")
 async def unblock_user(
     user_id: int,
-    unblock_data: Optional[UnblockUserRequest] = None,
     current_user: User = Depends(get_current_admin),
     db = Depends(get_db)
 ):
@@ -279,22 +180,14 @@ async def unblock_user(
     """
     admin_service = await get_admin_service(db)
     
-    user = await admin_service.unblock_user(
-        user_id, 
-        admin_id=current_user.user_id,
-        reason=unblock_data.reason if unblock_data else None
-    )
-    
-    if not user:
+    unblocked = await admin_service.unblock_user(user_id)
+    if not unblocked:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
     
-    return {
-        "message": f"User {user.user_name} unblocked successfully",
-        "user_id": user_id
-    }
+    return {"message": "User unblocked successfully", "user_id": user_id}
 
 
 # ========== Управление ролями ==========
@@ -302,35 +195,23 @@ async def unblock_user(
 @router.post("/users/{user_id}/roles")
 async def assign_role(
     user_id: int,
-    role_data: dict,  # {"role_id": int} или {"role_code": str}
+    role_data: dict,  # {"role_id": int}
     current_user: User = Depends(get_current_admin),
     db = Depends(get_db)
 ):
     """
     Назначение роли пользователю
-    Можно указать либо role_id, либо role_code
     """
     admin_service = await get_admin_service(db)
     
-    # Проверка существования пользователя
-    user = await admin_service.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    success = False
-    if "role_id" in role_data:
-        success = await admin_service.assign_role(user_id, role_data["role_id"])
-    elif "role_code" in role_data:
-        success = await admin_service.assign_role_by_code(user_id, role_data["role_code"])
-    else:
+    role_id = role_data.get("role_id")
+    if not role_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either role_id or role_code required"
+            detail="role_id required"
         )
     
+    success = await admin_service.assign_role(user_id, role_id)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -380,7 +261,15 @@ async def get_user_roles(
             detail="User not found"
         )
     
-    roles = await user.awaitable_attrs.roles
+    # Получаем пользователя из БД для доступа к ролям
+    from app.repositories.user_repo import UserRepository
+    user_repo = UserRepository(db)
+    user_model = await user_repo.get_by_id(user_id)
+    
+    if not user_model:
+        return []
+    
+    roles = await user_model.awaitable_attrs.roles
     return [
         {
             "role_id": r.role_id,
@@ -390,56 +279,6 @@ async def get_user_roles(
         }
         for r in roles
     ]
-
-
-# ========== Управление проектами ==========
-
-@router.post("/users/{user_id}/projects")
-async def assign_project(
-    user_id: int,
-    project_data: dict,  # {"project_id": int, "project_role": str}
-    current_user: User = Depends(get_current_admin),
-    db = Depends(get_db)
-):
-    """
-    Назначение проекта пользователю
-    """
-    admin_service = await get_admin_service(db)
-    
-    success = await admin_service.assign_project(
-        user_id, 
-        project_data.get("project_id"),
-        project_data.get("project_role", "member")
-    )
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to assign project"
-        )
-    
-    return {"message": "Project assigned successfully"}
-
-
-@router.delete("/users/{user_id}/projects/{project_id}")
-async def remove_project(
-    user_id: int,
-    project_id: int,
-    current_user: User = Depends(get_current_admin),
-    db = Depends(get_db)
-):
-    """
-    Удаление проекта у пользователя
-    """
-    admin_service = await get_admin_service(db)
-    
-    success = await admin_service.remove_project(user_id, project_id)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to remove project"
-        )
-    
-    return {"message": "Project removed successfully"}
 
 
 # ========== История входов ==========
@@ -456,7 +295,7 @@ async def get_user_login_history(
     """
     admin_service = await get_admin_service(db)
     
-    history = await admin_service.get_user_login_history(user_id, limit)
+    history = await admin_service.login_history_repo.get_by_user(user_id, limit)
     return {"user_id": user_id, "history": history}
 
 
@@ -471,19 +310,4 @@ async def get_admin_stats(
     Получение статистики для администратора
     """
     admin_service = await get_admin_service(db)
-    stats = await admin_service.get_stats()
-    return stats
-
-
-@router.get("/stats/daily-registrations")
-async def get_daily_registrations(
-    days: int = Query(30, ge=1, le=365),
-    current_user: User = Depends(get_current_admin),
-    db = Depends(get_db)
-):
-    """
-    Получение статистики регистраций по дням
-    """
-    admin_service = await get_admin_service(db)
-    stats = await admin_service.get_daily_registrations(days)
-    return {"days": days, "data": stats}
+    return await admin_service.get_stats()

@@ -1,4 +1,4 @@
-# app/services/auth_service.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# app/services/auth_service.py (ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 from fastapi import HTTPException, status, Request
@@ -48,7 +48,6 @@ class AuthService:
 
     async def _check_user_can_login(self, user_id: int) -> Tuple[bool, Optional[str]]:
         """Проверка возможности входа пользователя по ID"""
-        # Загружаем пользователя свежим запросом
         query = select(User).where(User.user_id == user_id)
         result = await self.user_repo.db.execute(query)
         user = result.scalar_one()
@@ -142,16 +141,15 @@ class AuthService:
 
         await self.user_repo.update_last_login(user_id)
 
-        # Перезагружаем пользователя с ролями
+        # Перезагружаем пользователя с ролями (УБРАЛИ projects)
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.projects)
+            selectinload(User.department)
         ).where(User.user_id == user_id)
         result = await self.user_repo.db.execute(query)
         user = result.unique().scalar_one()
 
         role_titles = [r.role_title for r in user.roles] if user.roles else []
-        project_titles = [p.project_title for p in user.projects] if user.projects else []
 
         password_updated_at = getattr(user, 'password_updated_at', None)
         must_change_password = True
@@ -161,7 +159,6 @@ class AuthService:
 
         access_token = self.token_service.create_access_token(
             user_id=user_id,
-            projects=project_titles,
             roles=role_titles,
             is_super_admin=getattr(user, 'is_super_admin', False)
         )

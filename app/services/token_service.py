@@ -1,4 +1,4 @@
-# app/services/token_service.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# app/services/token_service.py (ОБНОВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
 import jwt
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -21,13 +21,12 @@ class TokenService:
         self.refresh_repo = refresh_repo
         self.user_repo = user_repo
 
-    def create_access_token(self, user_id: int, projects: List[str], roles: List[str], is_super_admin: bool = False) -> str:
-        """Создает access токен с коротким сроком жизни"""
+    def create_access_token(self, user_id: int, roles: List[str], is_super_admin: bool = False) -> str:
+        """Создает access токен с коротким сроком жизни (БЕЗ ПРОЕКТОВ)"""
         payload = {
             "user_id": user_id,
-            "projects": projects,
-            "roles": roles,  # Исправлено: передаём список ролей
-            "is_super_admin": is_super_admin,  # НОВОЕ
+            "roles": roles,
+            "is_super_admin": is_super_admin,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
             "jti": str(uuid.uuid4()),
             "type": "access"
@@ -55,7 +54,6 @@ class TokenService:
             if payload.get("type") != token_type:
                 return None
 
-            # Проверка черного списка для access токена
             if token_type == "access":
                 is_blacklisted = await self.blacklist_repo.is_blacklisted(payload["jti"])
                 if is_blacklisted:
@@ -108,22 +106,19 @@ class TokenService:
             else:
                 return None
 
-        # Исправлено: используем selectinload
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.projects)
+            selectinload(User.department)
         ).where(User.user_id == user.user_id)
         result = await self.user_repo.db.execute(query)
         user = result.unique().scalar_one()
 
-        project_titles = user.get_projects_titles()
         role_titles = user.get_roles_titles()
 
         new_access = self.create_access_token(
             user_id=user.user_id,
-            projects=project_titles,
             roles=role_titles,
             is_super_admin=user.is_super_admin
         )

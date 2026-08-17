@@ -1,4 +1,4 @@
-# app/schemas/admin.py (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# app/schemas/admin.py (ОБНОВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import datetime
@@ -9,14 +9,14 @@ class UserAdminUpdate(BaseModel):
     """Схема для обновления пользователя администратором"""
     email: Optional[EmailStr] = None
     user_name: Optional[str] = Field(None, min_length=3, max_length=100)
-    full_name: Optional[str] = Field(None, max_length=200)  # НОВОЕ
+    full_name: Optional[str] = Field(None, max_length=200)
     gender: Optional[str] = Field(None, pattern="^[MF]$")
     birth_date: Optional[datetime] = None
     dept_code: Optional[str] = Field(None, max_length=20)
     phone_work: Optional[str] = Field(None, max_length=20)
     phone_mobile: Optional[str] = Field(None, max_length=20)
-    head_id: Optional[int] = Field(None, description="ID начальника")  # НОВОЕ
-    is_super_admin: Optional[bool] = None  # НОВОЕ
+    head_id: Optional[int] = None
+    is_super_admin: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -26,25 +26,25 @@ class UserAdminResponse(BaseModel):
     """Схема для ответа с данными пользователя (для админов)"""
     user_id: int
     user_name: str
-    full_name: Optional[str] = None  # НОВОЕ
+    full_name: Optional[str] = None
     email: Optional[str]
     gender: Optional[str]
     birth_date: Optional[datetime]
     dept_code: Optional[str]
     phone_work: Optional[str]
     phone_mobile: Optional[str]
-    head_id: Optional[int] = None  # НОВОЕ
-    is_super_admin: bool = False  # НОВОЕ
+    head_id: Optional[int] = None
+    is_super_admin: bool = False
 
     # Статус
     status: str
     is_blocked: bool
-    is_locked: bool = False  # НОВОЕ: временная блокировка
+    is_locked: bool = False
     is_deleted: bool
     blocked_reason: Optional[str]
     blocked_at: Optional[datetime]
     block_expires_at: Optional[datetime]
-    locked_until: Optional[datetime] = None  # НОВОЕ
+    locked_until: Optional[datetime] = None
     deleted_at: Optional[datetime]
 
     # Аудит
@@ -53,9 +53,8 @@ class UserAdminResponse(BaseModel):
     last_login_at: Optional[datetime]
     password_updated_at: Optional[datetime]
 
-    # Роли и проекты
+    # Роли (УБРАЛИ projects)
     roles: List[str] = []
-    projects: List[str] = []
 
     class Config:
         from_attributes = True
@@ -115,10 +114,10 @@ class AdminStatsResponse(BaseModel):
     total_users: int
     active_users: int
     blocked_users: int
-    locked_users: int = 0  # НОВОЕ: временно заблокированные
+    locked_users: int = 0
     deleted_users: int
     admin_users: int
-    super_admin_users: int = 0  # НОВОЕ
+    super_admin_users: int = 0
     regular_users: int
     users_with_temp_password: int
     users_password_expiring_soon: int
@@ -136,8 +135,8 @@ class BlockHistoryResponse(BaseModel):
     unblocked_by_name: Optional[str]
 
 
-def user_to_admin_response(user, roles: List[str] = None, projects: List[str] = None) -> UserAdminResponse:
-    """Преобразование модели User в UserAdminResponse"""
+def user_to_admin_response(user, roles: List[str] = None) -> UserAdminResponse:
+    """Преобразование модели User в UserAdminResponse (БЕЗ ПРОЕКТОВ)"""
     from app.schemas.user import get_user_status_from_model
     from datetime import datetime, timezone
 
@@ -171,5 +170,4 @@ def user_to_admin_response(user, roles: List[str] = None, projects: List[str] = 
         last_login_at=user.last_login_at,
         password_updated_at=user.password_updated_at,
         roles=roles or [],
-        projects=projects or [],
     )
