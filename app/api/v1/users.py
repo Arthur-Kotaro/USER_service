@@ -1,4 +1,4 @@
-# app/api/v1/users.py (ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
+# app/api/v1/users.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from datetime import datetime
@@ -45,7 +45,6 @@ async def get_my_profile(
     db = Depends(get_db)
 ):
     """Получение информации о текущем пользователе"""
-    # УБРАЛИ selectinload(User.projects)
     query = select(User).options(
         selectinload(User.roles),
         selectinload(User.department)
@@ -54,7 +53,6 @@ async def get_my_profile(
     user = result.unique().scalar_one()
 
     roles = user.get_roles_titles()
-
     return user_to_response(user, roles)
 
 
@@ -181,8 +179,56 @@ async def get_user_by_username(
         )
 
     roles = user.get_roles_titles()
-
     return user_to_response(user, roles)
+
+
+# ========== Иерархия ==========
+
+@router.get("/{user_id}/manager")
+async def get_manager(
+    user_id: int,
+    db = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Получить руководителя пользователя"""
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(user_id, include_deleted=False)
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    if user.head_id:
+        manager = await user_repo.get_by_id(user.head_id, include_deleted=False)
+        if manager:
+            return {
+                "manager_id": manager.user_id,
+                "manager_name": manager.user_name,
+                "manager_email": manager.email
+            }
+    return {"manager_id": None}
+
+
+@router.get("/{user_id}/subordinates")
+async def get_subordinates(
+    user_id: int,
+    db = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Получить подчиненных пользователя"""
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(user_id, include_deleted=False)
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    subordinates = await user_repo.get_subordinates(user_id)
+    return [
+        {
+            "user_id": u.user_id,
+            "user_name": u.user_name,
+            "full_name": u.full_name,
+            "email": u.email
+        }
+        for u in subordinates
+    ]
 
 
 # ========== Управление сессиями ==========
