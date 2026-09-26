@@ -395,3 +395,16 @@ class UserRepository:
             )
         )
         return result.scalars().all()
+
+
+    async def revoke_all_refresh_tokens(self, user_id: int) -> int:
+        """Отозвать все активные refresh-токены пользователя."""
+        from sqlalchemy import update as sa_update
+        from app.models.refresh_token import RefreshToken
+        result = await self.db.execute(
+            sa_update(RefreshToken)
+            .where(RefreshToken.user_id == user_id, RefreshToken.revoked == False)
+            .values(revoked=True)
+        )
+        await self.db.commit()
+        return result.rowcount
