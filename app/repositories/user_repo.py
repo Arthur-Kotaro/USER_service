@@ -311,41 +311,6 @@ class UserRepository:
 
     # ========== Методы для работы с ролями ==========
 
-    async def assign_role(self, user_id: int, role_id: int) -> bool:
-        """Назначение роли пользователю"""
-        user = await self.get_by_id(user_id)
-        if not user:
-            return False
-
-        from app.models.role import Role
-        result = await self.db.execute(select(Role).where(Role.role_id == role_id))
-        role = result.scalar_one_or_none()
-
-        if not role:
-            return False
-
-        if role not in user.roles:
-            user.roles.append(role)
-            await self.db.commit()
-
-        return True
-
-    async def remove_role(self, user_id: int, role_id: int) -> bool:
-        """Удаление роли у пользователя"""
-        user = await self.get_by_id(user_id)
-        if not user:
-            return False
-
-        from app.models.role import Role
-        result = await self.db.execute(select(Role).where(Role.role_id == role_id))
-        role = result.scalar_one_or_none()
-
-        if role and role in user.roles:
-            user.roles.remove(role)
-            await self.db.commit()
-
-        return True
-
     async def get_user_roles(self, user_id: int) -> List[str]:
         """Получение списка ролей пользователя"""
         user = await self.get_by_id(user_id)

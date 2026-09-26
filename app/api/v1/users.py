@@ -27,10 +27,12 @@ async def get_user_service(db) -> UserService:
 
 
 async def get_auth_service(db) -> AuthService:
+    from app.repositories.login_history_repo import LoginHistoryRepository
     user_repo = UserRepository(db)
     refresh_repo = RefreshTokenRepository(db)
+    login_history_repo = LoginHistoryRepository(db)
     token_service = TokenService(refresh_repo, user_repo)
-    return AuthService(user_repo, token_service, None)
+    return AuthService(user_repo, token_service, None, login_history_repo)
 
 
 @router.get("/me", response_model=UserResponse)

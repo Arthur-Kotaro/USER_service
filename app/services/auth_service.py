@@ -1,26 +1,30 @@
-# app/services/auth_service.py (ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
+# app/services/auth_service.py
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
-from fastapi import HTTPException, status, Request
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from fastapi import HTTPException, Request
 from app.repositories.user_repo import UserRepository
+from app.repositories.login_history_repo import LoginHistoryRepository
 from app.services.token_service import TokenService
 from app.services.email_service import EmailService
 from app.utils.hasher import verify_password, hash_password, generate_random_token
 from app.schemas.auth import (
     LoginRequest, TokenResponse, ChangePasswordRequest,
-    PasswordExpiryResponse, PasswordResetRequest
+    PasswordExpiryResponse, PasswordResetRequest,
 )
-from app.models.user import User
-from app.models.login_history import LoginHistory
 
 
 class AuthService:
-    def __init__(self, user_repo: UserRepository, token_service: TokenService, email_service: EmailService):
+    def __init__(
+        self,
+        user_repo: UserRepository,
+        token_service: TokenService,
+        email_service: EmailService,
+        login_history_repo: Optional[LoginHistoryRepository] = None,
+    ):
         self.user_repo = user_repo
         self.token_service = token_service
         self.email_service = email_service
+        self.login_history_repo = login_history_repo
         self.password_expiry_days = 60
 
     async def _log_login_attempt(
@@ -30,31 +34,30 @@ class AuthService:
         failure_reason: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
     ) -> None:
+        if self.login_history_repo is None:
+            return
         try:
-            login_history = LoginHistory(
+            await self.login_history_repo.create(
                 user_id=user_id,
                 login_status=status,
                 failure_reason=failure_reason,
                 ip_address=ip_address,
                 user_agent=user_agent,
-                session_id=session_id
+                session_id=session_id,
             )
-            self.user_repo.db.add(login_history)
-            await self.user_repo.db.commit()
         except Exception as e:
             print(f"Failed to log login attempt: {e}")
 
     async def _check_user_can_login(self, user_id: int) -> Tuple[bool, Optional[str]]:
-        """Проверка возможности входа пользователя по ID"""
-        query = select(User).where(User.user_id == user_id)
-        result = await self.user_repo.db.execute(query)
-        user = result.scalar_one()
-        
+        user = await self.user_repo.get_by_id(user_id, include_deleted=True)
+        if not user:
+            return False, "User not found"
+
         if user.deleted_at is not None:
             return False, "Account is deleted"
-        
+
         if user.blocked_at is not None:
             if user.block_expires_at is not None and user.block_expires_at <= datetime.now(timezone.utc):
                 user.blocked_at = None
@@ -64,20 +67,20 @@ class AuthService:
                 await self.user_repo.db.commit()
                 return True, None
             return False, user.blocked_reason or "Account is blocked"
-        
+
         if user.locked_until is not None:
             if user.locked_until > datetime.now(timezone.utc):
                 return False, f"Account locked until {user.locked_until.isoformat()}"
             user.locked_until = None
             user.failed_login_attempts = 0
             await self.user_repo.db.commit()
-        
+
         return True, None
 
     async def login(
         self,
         login_data: LoginRequest,
-        request: Optional[Request] = None
+        request: Optional[Request] = None,
     ) -> TokenResponse:
         client_ip = request.client.host if request else None
         user_agent = request.headers.get("user-agent") if request else None
@@ -89,7 +92,7 @@ class AuthService:
                 status="failed",
                 failure_reason="User not found",
                 ip_address=client_ip,
-                user_agent=user_agent
+                user_agent=user_agent,
             )
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -117,7 +120,7 @@ class AuthService:
                 status="failed",
                 failure_reason="Invalid password",
                 ip_address=client_ip,
-                user_agent=user_agent
+                user_agent=user_agent,
             )
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -132,7 +135,7 @@ class AuthService:
                 status="blocked",
                 failure_reason=block_reason,
                 ip_address=client_ip,
-                user_agent=user_agent
+                user_agent=user_agent,
             )
             raise HTTPException(status_code=403, detail=block_reason or "Account is blocked")
 
@@ -141,17 +144,10 @@ class AuthService:
 
         await self.user_repo.update_last_login(user_id)
 
-        # Перезагружаем пользователя с ролями (УБРАЛИ projects)
-        query = select(User).options(
-            selectinload(User.roles),
-            selectinload(User.department)
-        ).where(User.user_id == user_id)
-        result = await self.user_repo.db.execute(query)
-        user = result.unique().scalar_one()
+        user = await self.user_repo.get_by_id(user_id)
+        role_titles = user.get_roles_titles() if user else []
 
-        role_titles = [r.role_title for r in user.roles] if user.roles else []
-
-        password_updated_at = getattr(user, 'password_updated_at', None)
+        password_updated_at = user.password_updated_at if user else None
         must_change_password = True
         if password_updated_at:
             days_since_update = (datetime.now(timezone.utc) - password_updated_at).days
@@ -160,7 +156,7 @@ class AuthService:
         access_token = self.token_service.create_access_token(
             user_id=user_id,
             roles=role_titles,
-            is_super_admin=getattr(user, 'is_super_admin', False)
+            is_super_admin=bool(user and user.is_super_admin),
         )
         refresh_token = await self.token_service.create_refresh_token(user_id)
 
@@ -168,14 +164,14 @@ class AuthService:
             user_id=user_id,
             status="success",
             ip_address=client_ip,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
 
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
-            requires_password_change=must_change_password
+            requires_password_change=must_change_password,
         )
 
     async def change_password(self, user_id: int, request: ChangePasswordRequest) -> dict:
@@ -186,19 +182,18 @@ class AuthService:
             raise HTTPException(400, "Password must be at least 12 characters")
 
         import re
-        if not re.search(r'[A-Z]', request.new_password):
+        if not re.search(r"[A-Z]", request.new_password):
             raise HTTPException(400, "Password must contain at least one uppercase letter")
-        if not re.search(r'[a-z]', request.new_password):
+        if not re.search(r"[a-z]", request.new_password):
             raise HTTPException(400, "Password must contain at least one lowercase letter")
-        if not re.search(r'[0-9]', request.new_password):
+        if not re.search(r"[0-9]", request.new_password):
             raise HTTPException(400, "Password must contain at least one digit")
-        if not re.search(r'[!@#$%^&*()\-_=+]', request.new_password):
+        if not re.search(r"[!@#$%^&*()\-_=+]", request.new_password):
             raise HTTPException(400, "Password must contain at least one special character")
 
         user = await self.user_repo.get_by_id(user_id)
         if not user:
             raise HTTPException(404, "User not found")
-
         if user.deleted_at is not None:
             raise HTTPException(403, "Account is deleted")
 
@@ -238,7 +233,7 @@ class AuthService:
         return PasswordExpiryResponse(
             days_remaining=max(0, days_remaining),
             is_expired=is_expired,
-            expires_at=expires_at
+            expires_at=expires_at,
         )
 
     async def request_password_reset(self, request: PasswordResetRequest) -> dict:
@@ -267,7 +262,7 @@ class AuthService:
         return TokenResponse(
             access_token=new_access_token,
             refresh_token=refresh_token,
-            token_type="bearer"
+            token_type="bearer",
         )
 
     async def revoke_refresh_token(self, refresh_token: str) -> None:

@@ -139,9 +139,10 @@ async def get_current_user_with_optional_roles(
 async def get_auth_service(db: AsyncSession = Depends(get_db)):
     user_repo = UserRepository(db)
     refresh_repo = RefreshTokenRepository(db)
+    login_history_repo = LoginHistoryRepository(db)
     token_service = TokenService(refresh_repo, user_repo)
     email_service = EmailService()
-    return AuthService(user_repo, token_service, email_service)
+    return AuthService(user_repo, token_service, email_service, login_history_repo)
 
 
 async def get_user_service(db: AsyncSession = Depends(get_db)):
