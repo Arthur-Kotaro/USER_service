@@ -365,6 +365,20 @@ class UserRepository:
         )
         return result.scalars().all()
 
+
+    async def get_by_dept(self, dept_code: str) -> List[User]:
+        """Получить пользователей по коду отдела"""
+        result = await self.db.execute(
+            select(User).options(
+                selectinload(User.roles),
+                selectinload(User.department),
+            ).where(
+                User.dept_code == dept_code,
+                User.deleted_at.is_(None),
+            )
+        )
+        return result.unique().scalars().all()
+
     async def get_team(self, user_id: int, include_head: bool = False) -> List[User]:
         """Получить команду пользователя (включая его самого)"""
         user = await self.get_by_id(user_id)
