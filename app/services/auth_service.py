@@ -273,5 +273,8 @@ class AuthService:
     async def revoke_refresh_token(self, refresh_token: str) -> None:
         await self.token_service.revoke_refresh_token(refresh_token)
 
+    async def revoke_access_token(self, access_token: str) -> None:
+        await self.token_service.revoke_access_token(access_token)
+
     async def revoke_all_user_refresh_tokens(self, user_id: int) -> None:
         await self.token_service.revoke_all_user_refresh_tokens(user_id)

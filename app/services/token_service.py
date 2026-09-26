@@ -1,46 +1,46 @@
-# app/services/token_service.py (ОБНОВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
+# app/services/token_service.py
 import jwt
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from app.config import settings
-from app.repositories.blacklist_repo import BlacklistRepository
 from app.repositories.refresh_repo import RefreshTokenRepository
 from app.repositories.user_repo import UserRepository
 from app.utils.hasher import hash_token
+from app.utils.redis_client import redis_client
 
 
 class TokenService:
     def __init__(
         self,
-        blacklist_repo: BlacklistRepository,
         refresh_repo: RefreshTokenRepository,
-        user_repo: UserRepository
+        user_repo: UserRepository,
     ):
-        self.blacklist_repo = blacklist_repo
         self.refresh_repo = refresh_repo
         self.user_repo = user_repo
 
+    @staticmethod
+    def _blacklist_key(jti: str) -> str:
+        return f"blacklist:{jti}"
+
     def create_access_token(self, user_id: int, roles: List[str], is_super_admin: bool = False) -> str:
-        """Создает access токен с коротким сроком жизни (БЕЗ ПРОЕКТОВ)"""
         payload = {
             "user_id": user_id,
             "roles": roles,
             "is_super_admin": is_super_admin,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
             "jti": str(uuid.uuid4()),
-            "type": "access"
+            "type": "access",
         }
         return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
     async def create_refresh_token(self, user_id: int) -> str:
-        """Создает refresh токен и сохраняет его хеш в БД"""
         expires = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         payload = {
             "user_id": user_id,
             "exp": expires,
             "jti": str(uuid.uuid4()),
-            "type": "refresh"
+            "type": "refresh",
         }
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
         token_hash = hash_token(token)
@@ -48,15 +48,14 @@ class TokenService:
         return token
 
     async def decode_token(self, token: str, token_type: str = "access") -> Optional[Dict[str, Any]]:
-        """Декодирует и проверяет токен (подпись, срок, тип, чёрный список для access)"""
         try:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             if payload.get("type") != token_type:
                 return None
 
             if token_type == "access":
-                is_blacklisted = await self.blacklist_repo.is_blacklisted(payload["jti"])
-                if is_blacklisted:
+                jti = payload.get("jti")
+                if jti and await redis_client.exists(self._blacklist_key(jti)):
                     return None
 
             return payload
@@ -64,25 +63,23 @@ class TokenService:
             return None
 
     async def revoke_access_token(self, access_token: str) -> bool:
-        """Добавляет access токен в черный список (при логауте)"""
         payload = await self.decode_token(access_token, "access")
-        if payload:
-            expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
-            await self.blacklist_repo.add(jti=payload["jti"], expires_at=expires_at)
-            return True
-        return False
+        if not payload:
+            return False
+        expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+        ttl = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        if ttl > 0:
+            await redis_client.set(self._blacklist_key(payload["jti"]), "1", ex=ttl)
+        return True
 
     async def revoke_refresh_token(self, refresh_token: str) -> bool:
-        """Отзыв конкретного refresh токена"""
         token_hash = hash_token(refresh_token)
         return await self.refresh_repo.revoke(token_hash)
 
     async def revoke_all_user_refresh_tokens(self, user_id: int) -> int:
-        """Отозвать все refresh токены пользователя"""
         return await self.refresh_repo.revoke_all_by_user(user_id)
 
     async def refresh_access_token(self, refresh_token: str) -> Optional[str]:
-        """Обновляет access токен по refresh токену"""
         payload = await self.decode_token(refresh_token, "refresh")
         if not payload:
             return None
@@ -108,32 +105,26 @@ class TokenService:
 
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
+        from app.models.user import User
         query = select(User).options(
             selectinload(User.roles),
-            selectinload(User.department)
+            selectinload(User.department),
         ).where(User.user_id == user.user_id)
         result = await self.user_repo.db.execute(query)
         user = result.unique().scalar_one()
 
         role_titles = user.get_roles_titles()
-
-        new_access = self.create_access_token(
+        return self.create_access_token(
             user_id=user.user_id,
             roles=role_titles,
-            is_super_admin=user.is_super_admin
+            is_super_admin=user.is_super_admin,
         )
 
-        return new_access
-
     async def is_refresh_token_valid(self, refresh_token: str) -> bool:
-        """Проверка валидности refresh токена"""
         token_hash = hash_token(refresh_token)
         stored = await self.refresh_repo.get_by_hash(token_hash)
-
         if not stored or stored.revoked:
             return False
-
         if stored.expires_at < datetime.now(timezone.utc):
             return False
-
         return True

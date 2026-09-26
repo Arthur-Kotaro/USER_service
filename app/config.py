@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Redis
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_BLACKLIST_DB: int = 0
+
     # Admin
     ADMIN_PASSWORD: str
 
@@ -34,6 +39,9 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     FROM_EMAIL: str = ""
+
+    # Internal API
+    INTERNAL_API_KEY: str = "k4x9pLm2Qw8Rt5Yv7Bn3Fd1Gs6Hj0CzX"
 
     @property
     def get_database_url(self) -> str:
