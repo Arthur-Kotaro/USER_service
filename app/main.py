@@ -31,11 +31,7 @@ app = FastAPI(
 
 @app.get("/")
 async def root():
-    return {
-        "message": "User Service is running",
-        "docs": "/docs",
-        "redoc": "/redoc",
-    }
+    return {"message": "User Service is running", "docs": "/docs", "redoc": "/redoc"}
 
 
 @app.get("/health")
@@ -48,26 +44,10 @@ from app.api.v1 import auth, admin, users, internal, hr
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
-app.include_router(internal.router, prefix="/internal", tags=["Internal"])
 app.include_router(hr.router, prefix="/api/v1/hr", tags=["HR"])
-
-
-def print_routes():
-    print("\n=== Available routes ===")
-    for route in app.routes:
-        methods = getattr(route, "methods", None)
-        if methods:
-            print(f"  {route.path} -> [{', '.join(sorted(methods))}]")
-    print("=======================\n")
+app.include_router(internal.router, prefix="/internal", tags=["Internal"])
 
 
 if __name__ == "__main__":
     import uvicorn
-    print_routes()
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info",
-    )
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

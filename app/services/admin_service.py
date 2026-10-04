@@ -12,6 +12,7 @@ from app.schemas.admin import (
 )
 from app.models.user import User
 from app.utils.hasher import hash_password
+from app.services.event_publisher import publish_user_event
 
 
 class AdminService:
@@ -100,6 +101,8 @@ class AdminService:
         if not blocked:
             raise HTTPException(status_code=400, detail="Failed to block user")
 
+        await publish_user_event("user.blocked", user_id, {"reason": block_data.reason})
+
         user = await self.user_repo.get_by_id(user_id)
         admin = await self.user_repo.get_by_id(admin_id)
 
@@ -132,7 +135,10 @@ class AdminService:
                     detail="Cannot delete super admin",
                 )
 
-        return await self.user_repo.delete(user_id, soft=True)
+        result = await self.user_repo.delete(user_id, soft=True)
+        if result:
+            await publish_user_event("user.deleted", user_id, {"by": admin_id})
+        return result
 
     async def restore_user(self, user_id: int) -> bool:
         return await self.user_repo.restore(user_id)
