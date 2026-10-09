@@ -2,18 +2,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
-from typing import List, Optional
+from typing import List
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.models.role import Role
-from app.models.department import Department
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, user_to_response
-from app.schemas.admin import UserAdminResponse, user_to_admin_response
 from app.services.user_service import UserService
 from app.repositories.user_repo import UserRepository
 from app.repositories.role_repo import RoleRepository
+from app.repositories.department_repo import DepartmentRepository
+from app.repositories.position_repo import PositionRepository
 from app.utils.hasher import hash_password
 
 router = APIRouter(tags=["HR"])
@@ -22,20 +21,20 @@ router = APIRouter(tags=["HR"])
 async def check_hr_or_admin(current_user: User):
     if current_user.is_super_admin:
         return True
-    roles = current_user.get_roles_titles()
-    if "hr" in roles or "admin" in roles:
+    codes = current_user.get_role_codes()
+    if "hr" in codes or "admin" in codes:
         return True
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="HR or admin privileges required",
-    )
+    raise HTTPException(status_code=403, detail="HR or admin privileges required")
 
 
 def _make_service(db) -> UserService:
-    return UserService(UserRepository(db), RoleRepository(db))
+    return UserService(
+        UserRepository(db),
+        RoleRepository(db),
+        DepartmentRepository(db),
+        PositionRepository(db),
+    )
 
-
-# ========== Departments ==========
 
 @router.get("/departments")
 async def get_departments(
@@ -43,20 +42,40 @@ async def get_departments(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-    stmt = select(Department).order_by(Department.dept_code)
-    result = await db.execute(stmt)
-    departments = result.scalars().all()
+    repo = DepartmentRepository(db)
+    deps = await repo.get_all()
     return [
         {
+            "dept_id": str(d.dept_id),
             "dept_code": d.dept_code,
-            "dept_name": d.dept_name,
-            "parent_dept_code": d.parent_dept_code,
+            "dept_name_en": d.dept_name_en,
+            "dept_name_ru": d.dept_name_ru,
+            "parent_dept_id": str(d.parent_dept_id) if d.parent_dept_id else None,
+            "type": d.type,
+            "level": d.level,
         }
-        for d in departments
+        for d in deps
     ]
 
 
-# ========== Roles ==========
+@router.get("/positions")
+async def get_positions(
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    await check_hr_or_admin(current_user)
+    repo = PositionRepository(db)
+    positions = await repo.get_all()
+    return [
+        {
+            "position_id": p.position_id,
+            "position_code": p.position_code,
+            "position_name_en": p.position_name_en,
+            "position_name_ru": p.position_name_ru,
+        }
+        for p in positions
+    ]
+
 
 @router.get("/roles")
 async def get_roles(
@@ -64,23 +83,20 @@ async def get_roles(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-    stmt = select(Role).order_by(Role.role_id)
-    result = await db.execute(stmt)
-    roles = result.scalars().all()
+    repo = RoleRepository(db)
+    roles = await repo.get_all()
     return [
         {
             "role_id": r.role_id,
-            "role_title": r.role_title,
-            "role_title_ru": r.role_title_ru,
             "role_code": r.role_code,
+            "role_name_en": r.role_name_en,
+            "role_name_ru": r.role_name_ru,
         }
         for r in roles
     ]
 
 
-# ========== Users ==========
-
-@router.get("/users/search", response_model=List[UserAdminResponse])
+@router.get("/users/search", response_model=List[UserResponse])
 async def search_users(
     query: str = Query(..., min_length=2),
     limit: int = Query(20, ge=1, le=100),
@@ -88,44 +104,38 @@ async def search_users(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
-    search_pattern = f"%{query}%"
+    pattern = f"%{query}%"
     stmt = (
         select(User)
-        .options(selectinload(User.roles), selectinload(User.department))
+        .options(selectinload(User.roles), selectinload(User.department), selectinload(User.position))
         .where(
             User.deleted_at.is_(None),
             or_(
-                User.full_name.ilike(search_pattern),
-                User.user_name.ilike(search_pattern),
-                User.email.ilike(search_pattern),
+                User.last_name.ilike(pattern),
+                User.first_name.ilike(pattern),
+                User.user_name.ilike(pattern),
+                User.email.ilike(pattern),
             ),
         )
         .limit(limit)
     )
     result = await db.execute(stmt)
     users = result.unique().scalars().all()
-    return [user_to_admin_response(u, u.get_roles_titles()) for u in users]
+    return [user_to_response(u) for u in users]
 
 
-@router.get("/users/{user_id}", response_model=UserAdminResponse)
+@router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: int,
     current_user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
-    stmt = (
-        select(User)
-        .options(selectinload(User.roles), selectinload(User.department))
-        .where(User.user_id == user_id)
-    )
-    result = await db.execute(stmt)
-    user = result.unique().scalar_one_or_none()
+    service = _make_service(db)
+    user = await service.get_user_by_id(user_id, include_deleted=True)
     if not user:
         raise HTTPException(404, "User not found")
-    return user_to_admin_response(user, user.get_roles_titles())
+    return user
 
 
 @router.post("/users", response_model=UserResponse)
@@ -135,10 +145,8 @@ async def create_user(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
     service = _make_service(db)
     password_hash = hash_password(user_data.password)
-
     return await service.create_user(
         user_data=user_data,
         password_hash=password_hash,
@@ -154,14 +162,11 @@ async def update_user(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
     service = _make_service(db)
     user = await service.get_user_by_id(user_id, include_deleted=True)
     if not user:
         raise HTTPException(404, "User not found")
-
-    update_dict = update_data.model_dump(exclude_unset=True)
-    updated = await service.update_user(user_id, update_dict)
+    updated = await service.update_user(user_id, update_data.model_dump(exclude_unset=True))
     if not updated:
         raise HTTPException(400, "Failed to update user")
     return updated
@@ -175,10 +180,8 @@ async def assign_role(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
     service = _make_service(db)
-    success = await service.assign_role(user_id, role_id)
-    if not success:
+    if not await service.assign_role(user_id, role_id):
         raise HTTPException(400, "Failed to assign role")
     return {"message": "Role assigned successfully"}
 
@@ -191,10 +194,8 @@ async def remove_role(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
     service = _make_service(db)
-    success = await service.remove_role(user_id, role_id)
-    if not success:
+    if not await service.remove_role(user_id, role_id):
         raise HTTPException(400, "Failed to remove role")
     return {"message": "Role removed successfully"}
 
@@ -207,16 +208,13 @@ async def block_user(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
     service = _make_service(db)
     user = await service.get_user_by_id(user_id, include_deleted=True)
     if not user:
         raise HTTPException(404, "User not found")
     if user.is_super_admin:
         raise HTTPException(403, "Cannot block super admin")
-
-    success = await service.block_user(user_id, reason, current_user.user_id)
-    if not success:
+    if not await service.block_user(user_id, reason, current_user.user_id):
         raise HTTPException(400, "Failed to block user")
     return {"message": "User blocked successfully"}
 
@@ -228,9 +226,7 @@ async def unblock_user(
     db=Depends(get_db),
 ):
     await check_hr_or_admin(current_user)
-
     service = _make_service(db)
-    success = await service.unblock_user(user_id)
-    if not success:
+    if not await service.unblock_user(user_id):
         raise HTTPException(400, "Failed to unblock user")
     return {"message": "User unblocked successfully"}

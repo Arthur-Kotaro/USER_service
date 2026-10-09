@@ -34,7 +34,6 @@ class AuthService:
         failure_reason: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
-        session_id: Optional[str] = None,
     ) -> None:
         if self.login_history_repo is None:
             return
@@ -45,37 +44,9 @@ class AuthService:
                 failure_reason=failure_reason,
                 ip_address=ip_address,
                 user_agent=user_agent,
-                session_id=session_id,
             )
         except Exception as e:
             print(f"Failed to log login attempt: {e}")
-
-    async def _check_user_can_login(self, user_id: int) -> Tuple[bool, Optional[str]]:
-        user = await self.user_repo.get_by_id(user_id, include_deleted=True)
-        if not user:
-            return False, "User not found"
-
-        if user.deleted_at is not None:
-            return False, "Account is deleted"
-
-        if user.blocked_at is not None:
-            if user.block_expires_at is not None and user.block_expires_at <= datetime.now(timezone.utc):
-                user.blocked_at = None
-                user.blocked_reason = None
-                user.blocked_by = None
-                user.block_expires_at = None
-                await self.user_repo.db.commit()
-                return True, None
-            return False, user.blocked_reason or "Account is blocked"
-
-        if user.locked_until is not None:
-            if user.locked_until > datetime.now(timezone.utc):
-                return False, f"Account locked until {user.locked_until.isoformat()}"
-            user.locked_until = None
-            user.failed_login_attempts = 0
-            await self.user_repo.db.commit()
-
-        return True, None
 
     async def login(
         self,
@@ -110,7 +81,7 @@ class AuthService:
                     using_temp_password = True
 
         if not is_valid and not is_temp_valid:
-            user.failed_login_attempts += 1
+            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
             if user.failed_login_attempts >= 5:
                 user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=30)
             await self.user_repo.db.commit()
@@ -124,11 +95,7 @@ class AuthService:
             )
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        user.failed_login_attempts = 0
-        user.locked_until = None
-        await self.user_repo.db.commit()
-
-        can_login, block_reason = await self._check_user_can_login(user_id)
+        can_login, block_reason = user.can_login()
         if not can_login:
             await self._log_login_attempt(
                 user_id=user_id,
@@ -139,15 +106,20 @@ class AuthService:
             )
             raise HTTPException(status_code=403, detail=block_reason or "Account is blocked")
 
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        await self.user_repo.db.commit()
+
         if using_temp_password:
             await self.user_repo.clear_temp_password(user_id)
 
         await self.user_repo.update_last_login(user_id)
 
         user = await self.user_repo.get_by_id(user_id)
-        role_titles = user.get_roles_titles() if user else []
+        role_codes = user.get_role_codes()
+        position_code = user.position.position_code if user.position else None
 
-        password_updated_at = user.password_updated_at if user else None
+        password_updated_at = user.password_updated_at
         must_change_password = True
         if password_updated_at:
             days_since_update = (datetime.now(timezone.utc) - password_updated_at).days
@@ -155,8 +127,9 @@ class AuthService:
 
         access_token = self.token_service.create_access_token(
             user_id=user_id,
-            roles=role_titles,
-            is_super_admin=bool(user and user.is_super_admin),
+            position=position_code,
+            roles=role_codes,
+            is_super_admin=bool(user.is_super_admin),
         )
         refresh_token = await self.token_service.create_refresh_token(user_id)
 
@@ -177,7 +150,6 @@ class AuthService:
     async def change_password(self, user_id: int, request: ChangePasswordRequest) -> dict:
         if request.new_password != request.confirm_password:
             raise HTTPException(400, "New passwords do not match")
-
         if len(request.new_password) < 12:
             raise HTTPException(400, "Password must be at least 12 characters")
 
@@ -196,7 +168,6 @@ class AuthService:
             raise HTTPException(404, "User not found")
         if user.deleted_at is not None:
             raise HTTPException(403, "Account is deleted")
-
         if not verify_password(request.current_password, user.password_hash):
             raise HTTPException(401, "Current password is incorrect")
 
@@ -207,7 +178,6 @@ class AuthService:
         user.change_password(new_hashed)
         await self.user_repo.db.commit()
         await self.user_repo.clear_temp_password(user.user_id)
-
         await self.token_service.revoke_all_user_refresh_tokens(user.user_id)
 
         return {"message": "Password changed successfully. Please login again."}
@@ -222,8 +192,7 @@ class AuthService:
         last_updated = user.password_updated_at or user.created_at
         if last_updated:
             expires_at = last_updated + timedelta(days=self.password_expiry_days)
-            now = datetime.now(timezone.utc)
-            days_remaining = (expires_at - now).days
+            days_remaining = (expires_at - datetime.now(timezone.utc)).days
             is_expired = days_remaining <= 0
         else:
             expires_at = None
@@ -246,13 +215,11 @@ class AuthService:
         temp_password = generate_random_token(10)
         temp_password_hash = hash_password(temp_password)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
-
         await self.user_repo.set_temp_password(user.user_id, temp_password_hash, expires_at)
 
-        sent = await self.email_service.send_temp_password(user.email, temp_password, user.user_name)
+        sent = await self.email_service.send_temp_password(user.email, temp_password, user.full_name)
         if not sent:
             raise HTTPException(500, "Failed to send email. Please contact administrator.")
-
         return {"message": "Temporary password has been sent to your email"}
 
     async def refresh_token(self, refresh_token: str) -> TokenResponse:

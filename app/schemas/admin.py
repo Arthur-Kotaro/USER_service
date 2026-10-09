@@ -1,42 +1,31 @@
-# app/schemas/admin.py (ОБНОВЛЕННАЯ ВЕРСИЯ - БЕЗ ПРОЕКТОВ)
-from pydantic import BaseModel, EmailStr, Field
+# app/schemas/admin.py
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from app.schemas.user import UserStatus
-
-
-class UserAdminUpdate(BaseModel):
-    """Схема для обновления пользователя администратором"""
-    email: Optional[EmailStr] = None
-    user_name: Optional[str] = Field(None, min_length=3, max_length=100)
-    full_name: Optional[str] = Field(None, max_length=200)
-    gender: Optional[str] = Field(None, pattern="^[MF]$")
-    birth_date: Optional[datetime] = None
-    dept_code: Optional[str] = Field(None, max_length=20)
-    phone_work: Optional[str] = Field(None, max_length=20)
-    phone_mobile: Optional[str] = Field(None, max_length=20)
-    head_id: Optional[int] = None
-    is_super_admin: Optional[bool] = None
-
-    class Config:
-        from_attributes = True
+from uuid import UUID
+from app.schemas.user import UserAdminUpdate, UserStatus
 
 
 class UserAdminResponse(BaseModel):
-    """Схема для ответа с данными пользователя (для админов)"""
     user_id: int
     user_name: str
-    full_name: Optional[str] = None
+    last_name: str
+    first_name: str
+    middle_name: Optional[str]
+    full_name: str
     email: Optional[str]
     gender: Optional[str]
     birth_date: Optional[datetime]
-    dept_code: Optional[str]
+    position_id: int
+    position_code: Optional[str] = None
+    position_name_ru: Optional[str] = None
+    dept_id: Optional[UUID]
+    dept_code: Optional[str] = None
+    dept_name_ru: Optional[str] = None
     phone_work: Optional[str]
     phone_mobile: Optional[str]
-    head_id: Optional[int] = None
     is_super_admin: bool = False
 
-    # Статус
     status: str
     is_blocked: bool
     is_locked: bool = False
@@ -47,99 +36,26 @@ class UserAdminResponse(BaseModel):
     locked_until: Optional[datetime] = None
     deleted_at: Optional[datetime]
 
-    # Аудит
     created_at: datetime
     updated_at: datetime
     last_login_at: Optional[datetime]
     password_updated_at: Optional[datetime]
 
-    # Роли (УБРАЛИ projects)
     roles: List[str] = []
+    role_codes: List[str] = []
 
     class Config:
         from_attributes = True
 
 
 class UserListResponse(BaseModel):
-    """Схема для списка пользователей с пагинацией"""
     total: int
     users: List[UserAdminResponse]
 
 
-class BlockUserRequest(BaseModel):
-    """Схема для блокировки пользователя"""
-    reason: str = Field(..., min_length=1, max_length=500)
-    expires_at: Optional[datetime] = None
-
-
-class UnblockUserRequest(BaseModel):
-    """Схема для разблокировки пользователя"""
-    reason: Optional[str] = Field(None, max_length=500)
-
-
-class BlockUserResponse(BaseModel):
-    """Схема ответа после блокировки"""
-    user_id: int
-    user_name: str
-    blocked_at: datetime
-    blocked_reason: str
-    block_expires_at: Optional[datetime]
-    blocked_by: int
-    blocked_by_name: Optional[str]
-
-
-class SoftDeleteUserRequest(BaseModel):
-    """Схема для мягкого удаления пользователя"""
-    reason: Optional[str] = Field(None, max_length=500)
-
-
-class RestoreUserRequest(BaseModel):
-    """Схема для восстановления пользователя"""
-    reason: Optional[str] = Field(None, max_length=500)
-
-
-class DeletedUserResponse(BaseModel):
-    """Схема ответа для удалённого пользователя"""
-    user_id: int
-    user_name: str
-    email: Optional[str]
-    deleted_at: datetime
-    deleted_reason: Optional[str]
-    deleted_by: Optional[int]
-    deleted_by_name: Optional[str]
-
-
-class AdminStatsResponse(BaseModel):
-    """Схема для статистики (админ-панель)"""
-    total_users: int
-    active_users: int
-    blocked_users: int
-    locked_users: int = 0
-    deleted_users: int
-    admin_users: int
-    super_admin_users: int = 0
-    regular_users: int
-    users_with_temp_password: int
-    users_password_expiring_soon: int
-
-
-class BlockHistoryResponse(BaseModel):
-    """Схема истории блокировок пользователя"""
-    blocked_at: datetime
-    blocked_reason: Optional[str]
-    blocked_by: int
-    blocked_by_name: Optional[str]
-    block_expires_at: Optional[datetime]
-    unblocked_at: Optional[datetime]
-    unblocked_by: Optional[int]
-    unblocked_by_name: Optional[str]
-
-
-def user_to_admin_response(user, roles: List[str] = None) -> UserAdminResponse:
-    """Преобразование модели User в UserAdminResponse (БЕЗ ПРОЕКТОВ)"""
+def user_to_admin_response(user) -> UserAdminResponse:
     from app.schemas.user import get_user_status_from_model
     from datetime import datetime, timezone
-
     is_locked = False
     if user.locked_until is not None:
         is_locked = user.locked_until > datetime.now(timezone.utc)
@@ -147,15 +63,22 @@ def user_to_admin_response(user, roles: List[str] = None) -> UserAdminResponse:
     return UserAdminResponse(
         user_id=user.user_id,
         user_name=user.user_name,
+        last_name=user.last_name,
+        first_name=user.first_name,
+        middle_name=user.middle_name,
         full_name=user.full_name,
         email=user.email,
         gender=user.gender,
         birth_date=user.birth_date,
-        dept_code=user.dept_code,
+        position_id=user.position_id,
+        position_code=user.position.position_code if user.position else None,
+        position_name_ru=user.position.position_name_ru if user.position else None,
+        dept_id=user.dept_id,
+        dept_code=user.department.dept_code if user.department else None,
+        dept_name_ru=user.department.dept_name_ru if user.department else None,
         phone_work=user.phone_work,
         phone_mobile=user.phone_mobile,
-        head_id=user.head_id,
-        is_super_admin=user.is_super_admin or False,
+        is_super_admin=bool(user.is_super_admin),
         status=get_user_status_from_model(user),
         is_blocked=user.blocked_at is not None,
         is_locked=is_locked,
@@ -169,5 +92,6 @@ def user_to_admin_response(user, roles: List[str] = None) -> UserAdminResponse:
         updated_at=user.updated_at,
         last_login_at=user.last_login_at,
         password_updated_at=user.password_updated_at,
-        roles=roles or [],
+        roles=user.get_role_titles(),
+        role_codes=user.get_role_codes(),
     )

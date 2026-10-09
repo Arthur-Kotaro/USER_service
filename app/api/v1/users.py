@@ -1,9 +1,6 @@
 # app/api/v1/users.py
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
-from datetime import datetime
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.dependencies import get_current_user
@@ -11,23 +8,28 @@ from app.schemas.user import UserResponse, UserUpdate, user_to_response
 from app.schemas.auth import ChangePasswordRequest
 from app.services.user_service import UserService
 from app.services.auth_service import AuthService
+from app.services.token_service import TokenService
 from app.repositories.user_repo import UserRepository
 from app.repositories.role_repo import RoleRepository
-from app.services.token_service import TokenService
+from app.repositories.department_repo import DepartmentRepository
+from app.repositories.position_repo import PositionRepository
 from app.repositories.refresh_repo import RefreshTokenRepository
+from app.repositories.login_history_repo import LoginHistoryRepository
 from app.models.user import User
 
 router = APIRouter(tags=["Users"])
 
 
-async def get_user_service(db) -> UserService:
-    user_repo = UserRepository(db)
-    role_repo = RoleRepository(db)
-    return UserService(user_repo, role_repo)
+def _make_user_service(db) -> UserService:
+    return UserService(
+        UserRepository(db),
+        RoleRepository(db),
+        DepartmentRepository(db),
+        PositionRepository(db),
+    )
 
 
-async def get_auth_service(db) -> AuthService:
-    from app.repositories.login_history_repo import LoginHistoryRepository
+def _make_auth_service(db) -> AuthService:
     user_repo = UserRepository(db)
     refresh_repo = RefreshTokenRepository(db)
     login_history_repo = LoginHistoryRepository(db)
@@ -36,19 +38,8 @@ async def get_auth_service(db) -> AuthService:
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_my_profile(
-    current_user: User = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    query = select(User).options(
-        selectinload(User.roles),
-        selectinload(User.department),
-    ).where(User.user_id == current_user.user_id)
-    result = await db.execute(query)
-    user = result.unique().scalar_one()
-
-    roles = user.get_roles_titles()
-    return user_to_response(user, roles)
+async def get_my_profile(current_user: User = Depends(get_current_user)):
+    return user_to_response(current_user)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -57,21 +48,11 @@ async def update_my_profile(
     current_user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    user_service = await get_user_service(db)
-
+    service = _make_user_service(db)
     update_dict = update_data.model_dump(exclude_unset=True)
-    forbidden = ["user_name", "email", "head_id", "is_super_admin"]
-
-    for field in forbidden:
-        update_dict.pop(field, None)
-
-    user = await user_service.update_user(current_user.user_id, update_dict)
+    user = await service.update_user(current_user.user_id, update_dict)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
+        raise HTTPException(404, "User not found")
     return user
 
 
@@ -81,21 +62,13 @@ async def change_my_password(
     current_user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    auth_service = await get_auth_service(db)
+    auth_service = _make_auth_service(db)
     return await auth_service.change_password(current_user.user_id, request)
 
 
 @router.get("/me/status")
-async def get_my_status(
-    current_user: User = Depends(get_current_user),
-):
+async def get_my_status(current_user: User = Depends(get_current_user)):
     from app.schemas.user import get_user_status_from_model
-    from datetime import datetime, timezone
-
-    is_locked = False
-    if current_user.locked_until is not None:
-        is_locked = current_user.locked_until > datetime.now(timezone.utc)
-
     return {
         "user_id": current_user.user_id,
         "user_name": current_user.user_name,
@@ -103,13 +76,11 @@ async def get_my_status(
         "email": current_user.email,
         "status": get_user_status_from_model(current_user),
         "is_blocked": current_user.blocked_at is not None,
-        "is_locked": is_locked,
         "is_deleted": current_user.deleted_at is not None,
         "is_super_admin": current_user.is_super_admin,
-        "blocked_reason": current_user.blocked_reason,
-        "block_expires_at": current_user.block_expires_at,
-        "locked_until": current_user.locked_until,
-        "deleted_at": current_user.deleted_at,
+        "position_code": current_user.position.position_code if current_user.position else None,
+        "dept_code": current_user.department.dept_code if current_user.department else None,
+        "roles": current_user.get_role_codes(),
     }
 
 
@@ -121,17 +92,17 @@ async def get_users(
     current_user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    user_service = await get_user_service(db)
-
-    users = await user_service.get_all_users(skip, limit, only_active=True)
-
+    service = _make_user_service(db)
+    users = await service.get_all_users(skip, limit, only_active=True)
     if search:
+        s = search.lower()
         users = [
             u for u in users
-            if search.lower() in u.user_name.lower()
-            or (u.email and search.lower() in u.email.lower())
+            if s in u.user_name.lower()
+            or s in (u.last_name or "").lower()
+            or s in (u.first_name or "").lower()
+            or (u.email and s in u.email.lower())
         ]
-
     return users
 
 
@@ -141,80 +112,11 @@ async def get_user(
     current_user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    user_service = await get_user_service(db)
-
-    user = await user_service.get_user_by_id(user_id)
+    service = _make_user_service(db)
+    user = await service.get_user_by_id(user_id)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
+        raise HTTPException(404, "User not found")
     return user
-
-
-@router.get("/by-username/{username}", response_model=UserResponse)
-async def get_user_by_username(
-    username: str,
-    current_user: User = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    user_service = await get_user_service(db)
-
-    user = await user_service.get_user_by_username(username)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    roles = user.get_roles_titles()
-    return user_to_response(user, roles)
-
-
-@router.get("/{user_id}/manager")
-async def get_manager(
-    user_id: int,
-    db=Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    user_repo = UserRepository(db)
-    user = await user_repo.get_by_id(user_id, include_deleted=False)
-    if not user:
-        raise HTTPException(404, "User not found")
-
-    if user.head_id:
-        manager = await user_repo.get_by_id(user.head_id, include_deleted=False)
-        if manager:
-            return {
-                "manager_id": manager.user_id,
-                "manager_name": manager.user_name,
-                "manager_email": manager.email,
-            }
-    return {"manager_id": None}
-
-
-@router.get("/{user_id}/subordinates")
-async def get_subordinates(
-    user_id: int,
-    db=Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    user_repo = UserRepository(db)
-    user = await user_repo.get_by_id(user_id, include_deleted=False)
-    if not user:
-        raise HTTPException(404, "User not found")
-
-    subordinates = await user_repo.get_subordinates(user_id)
-    return [
-        {
-            "user_id": u.user_id,
-            "user_name": u.user_name,
-            "full_name": u.full_name,
-            "email": u.email,
-        }
-        for u in subordinates
-    ]
 
 
 @router.post("/me/logout-all")
@@ -222,13 +124,6 @@ async def logout_all_devices(
     current_user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    refresh_repo = RefreshTokenRepository(db)
-    user_repo = UserRepository(db)
-    token_service = TokenService(refresh_repo, user_repo)
-
-    revoked_count = await token_service.revoke_all_user_refresh_tokens(current_user.user_id)
-
-    return {
-        "message": "Logged out from all devices",
-        "revoked_tokens": revoked_count,
-    }
+    token_service = TokenService(RefreshTokenRepository(db), UserRepository(db))
+    revoked = await token_service.revoke_all_user_refresh_tokens(current_user.user_id)
+    return {"message": "Logged out from all devices", "revoked_tokens": revoked}

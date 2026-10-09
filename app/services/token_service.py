@@ -23,9 +23,16 @@ class TokenService:
     def _blacklist_key(jti: str) -> str:
         return f"blacklist:{jti}"
 
-    def create_access_token(self, user_id: int, roles: List[str], is_super_admin: bool = False) -> str:
+    def create_access_token(
+        self,
+        user_id: int,
+        position: Optional[str],
+        roles: List[str],
+        is_super_admin: bool = False,
+    ) -> str:
         payload = {
             "user_id": user_id,
+            "position": position,
             "roles": roles,
             "is_super_admin": is_super_admin,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
@@ -52,12 +59,10 @@ class TokenService:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             if payload.get("type") != token_type:
                 return None
-
             if token_type == "access":
                 jti = payload.get("jti")
                 if jti and await redis_client.exists(self._blacklist_key(jti)):
                     return None
-
             return payload
         except jwt.PyJWTError:
             return None
@@ -92,10 +97,8 @@ class TokenService:
         user = await self.user_repo.get_by_id(payload["user_id"])
         if not user:
             return None
-
         if user.deleted_at is not None:
             return None
-
         if user.blocked_at is not None:
             if user.block_expires_at is not None:
                 if user.block_expires_at > datetime.now(timezone.utc):
@@ -103,21 +106,11 @@ class TokenService:
             else:
                 return None
 
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-        from app.models.user import User
-        query = select(User).options(
-            selectinload(User.roles),
-            selectinload(User.department),
-        ).where(User.user_id == user.user_id)
-        result = await self.user_repo.db.execute(query)
-        user = result.unique().scalar_one()
-
-        role_titles = user.get_roles_titles()
         return self.create_access_token(
             user_id=user.user_id,
-            roles=role_titles,
-            is_super_admin=user.is_super_admin,
+            position=user.position.position_code if user.position else None,
+            roles=user.get_role_codes(),
+            is_super_admin=bool(user.is_super_admin),
         )
 
     async def is_refresh_token_valid(self, refresh_token: str) -> bool:

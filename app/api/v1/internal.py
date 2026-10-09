@@ -1,5 +1,5 @@
 # app/api/v1/internal.py
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
@@ -11,7 +11,7 @@ from app.schemas.impersonation import (
     ImpersonateRequest, ImpersonateResponse, ImpersonationCloseRequest,
 )
 from app.config import settings
-from app.dependencies import get_current_user, get_current_super_admin
+from app.dependencies import get_current_user
 from app.repositories.user_repo import UserRepository
 from app.repositories.refresh_repo import RefreshTokenRepository
 from app.services.impersonation_service import ImpersonationService
@@ -33,17 +33,18 @@ async def get_users_internal(
     db=Depends(get_db),
 ):
     stmt = select(User).options(
-        selectinload(User.roles), selectinload(User.department)
+        selectinload(User.roles), selectinload(User.department), selectinload(User.position)
     ).where(User.deleted_at.is_(None))
     if search:
         p = f"%{search}%"
         stmt = stmt.where(or_(
-            User.full_name.ilike(p), User.user_name.ilike(p), User.email.ilike(p)
+            User.last_name.ilike(p), User.first_name.ilike(p),
+            User.user_name.ilike(p), User.email.ilike(p),
         ))
     stmt = stmt.limit(limit)
     result = await db.execute(stmt)
     users = result.unique().scalars().all()
-    return [user_to_response(u, u.get_roles_titles()) for u in users]
+    return [user_to_response(u) for u in users]
 
 
 @router.get("/users/{user_id}", response_model=UserResponse)
@@ -53,13 +54,13 @@ async def get_user_internal(
     db=Depends(get_db),
 ):
     stmt = select(User).options(
-        selectinload(User.roles), selectinload(User.department)
+        selectinload(User.roles), selectinload(User.department), selectinload(User.position)
     ).where(User.user_id == user_id, User.deleted_at.is_(None))
     result = await db.execute(stmt)
     user = result.unique().scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return user_to_response(user, user.get_roles_titles())
+    return user_to_response(user)
 
 
 @router.post("/auth/impersonate", response_model=ImpersonateResponse)
@@ -69,7 +70,9 @@ async def impersonate(
     db=Depends(get_db),
 ):
     service = ImpersonationService(
-        UserRepository(db), RefreshTokenRepository(db), settings.USER_SERVICE_URL if hasattr(settings, "USER_SERVICE_URL") else "http://localhost:8000"
+        UserRepository(db),
+        RefreshTokenRepository(db),
+        settings.USER_SERVICE_URL if hasattr(settings, "USER_SERVICE_URL") else "http://localhost:8000",
     )
     result = await service.impersonate(recipient_id=current_user.user_id, donor_id=data.donor_id)
     return ImpersonateResponse(**result)

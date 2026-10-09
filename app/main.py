@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Starting up...")
+    print("Starting up User Service...")
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
@@ -18,13 +18,12 @@ async def lifespan(app: FastAPI):
     yield
     print("Shutting down...")
     await engine.dispose()
-    print("Database engine disposed")
 
 
 app = FastAPI(
     title="User Service",
     description="User Service",
-    version="2.0.0",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -39,12 +38,13 @@ async def health_check():
     return {"status": "healthy"}
 
 
-from app.api.v1 import auth, admin, users, internal, hr
+from app.api.v1 import auth, admin, users, internal, hr, departments
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(hr.router, prefix="/api/v1/hr", tags=["HR"])
+app.include_router(departments.router, prefix="/api/v1", tags=["Departments"])
 app.include_router(internal.router, prefix="/internal", tags=["Internal"])
 
 
